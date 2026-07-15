@@ -68,7 +68,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          ./helper.sh check_approval "${{ github.repository }}" "prd" "${{ github.sha }}" "${{ github.run_id }}"
+          ./helper.sh check_approval "${{ github.repository }}" "prd" "${{ github.sha }}" "${{ github.run_id }}" approval-record.txt "## 🚦 Peer approval"
         
         # run: |
         #   # Get the latest deployment for this ref+environment

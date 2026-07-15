@@ -234,6 +234,11 @@ check_approval(){
   local COMMIT_SHA="$3"
   [ -z "$4" ] && err "[check_approval] missing argument: GITHUB_RUN_ID" && exit 1
   local GITHUB_RUN_ID="$4"
+  [ -z "$5" ] && err "[check_approval] missing argument: APPROVAL_DOC" && exit 1
+  local APPROVAL_DOC="$5"
+  [ -z "$6" ] && err "[check_approval] missing argument: APPROVAL_HEADER" && exit 1
+  local APPROVAL_HEADER="$6"
+
 
         #   {
         #     "role": "${{ needs.resolve-config.outputs.approval-role-validation-lead }}",
@@ -262,6 +267,21 @@ check_approval(){
   local approval=$(gh api "/repos/${REPO}/actions/runs/${GITHUB_RUN_ID}/approvals" --jq '.[] | select(.state=="approved") | select(any(.environments[]; .name=="'"${GH_ENV}"'")  )')
   [ -z "$approval" ] && err "[check_approval] no approval found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
   info "[check_approval] approval: $approval"
+
+  local approver=$(echo $approval | jq -r '.user.login' | tr -d '"')
+  [ -z "$approver" ] && err "[check_approval] no approver found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
+  info "[check_approval] approver: $approver"
+
+  local approver_comment=$(echo $approval | jq -r '.comment' | tr -d '"')
+  [ -z "$approver_comment" ] && err "[check_approval] no approver comment found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
+  info "[check_approval] approver comment: $approver_comment"
+
+
+  echo "$APPROVAL_HEADER" > "$APPROVAL_DOC"
+  echo "Approval timestamp: $approval_ts" >> "$APPROVAL_DOC"
+  echo "Approver: $approver" >> "$APPROVAL_DOC"
+  echo "Comment: $approver_comment" >> "$APPROVAL_DOC"
+  cat "$APPROVAL_DOC" >> "$GITHUB_STEP_SUMMARY"
 
   info "[check_approval|out]"
 }
