@@ -268,11 +268,13 @@ check_approval(){
   [ -z "$approval" ] && err "[check_approval] no approval found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
   info "[check_approval] approval: $approval"
 
-  local approver=$(echo $approval | jq -r '.user.login' | tr -d '"')
+  echo "$approval" | jq -r '.user.login'
+  
+  local approver=$(echo "$approval" | jq -r '.user.login' | tr -d '"')
   [ -z "$approver" ] && err "[check_approval] no approver found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
   info "[check_approval] approver: $approver"
 
-  local approver_comment=$(echo $approval | jq -r '.comment' | tr -d '"')
+  local approver_comment=$(echo "$approval" | jq -r '.comment' | tr -d '"')
   [ -z "$approver_comment" ] && err "[check_approval] no approver comment found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
   info "[check_approval] approver comment: $approver_comment"
 
