@@ -259,8 +259,10 @@ check_approval(){
   [ -z "$approval_ts" ] && err "[check_approval] no successful deployment status found for deployment id '${deployment_id}'" && exit 1
   info "[check_approval] approval timestamp: $approval_ts"
 
-  gh api "/repos/${REPO}/actions/runs/${GITHUB_RUN_ID}/approvals"
-  
+  local approval=$(gh api "/repos/${REPO}/actions/runs/${GITHUB_RUN_ID}/approvals" --jq '.[] | select(.state=="approved") | select(any(.environments[]; .name=="'"${GH_ENV}"'")  )')
+  [ -z "$approval" ] && err "[check_approval] no approval found for environment '${GH_ENV}' and commit '${COMMIT_SHA}'" && exit 1
+  info "[check_approval] approval: $approval"
+
   info "[check_approval|out]"
 }
 
