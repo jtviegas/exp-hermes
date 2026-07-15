@@ -81,9 +81,8 @@ jobs:
           approvals=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
             --jq '.[] | select(.state=="approved")')
           echo "approvals: $approvals"
-          
-          status=$(gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses") 
-          # \ --jq 'sort_by(.created_at) | map(select(.state == "success"))'
+          echo "..."
+          status=$(gh api "/repos/${{ github.repository }}/deployments/$deployment_id/statuses") 
           echo "status: $status"
 
   
