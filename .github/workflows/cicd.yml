@@ -83,9 +83,9 @@ jobs:
           gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
             --jq '.[] | select(.state=="approved")'
           
-          gh api -X GET "/orgs/novonordisk/audit-log" \
-            -f phrase="action:workflows.approve_workflow_job" \
-            --jq '.[] | {actor, created_at: (.["@timestamp"]), workflow_run: .workflow_run_id}'
+          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" \
+            --jq 'sort_by(.created_at)
+                  | map(select(.state != "waiting"))
 
   
   approval_b:
