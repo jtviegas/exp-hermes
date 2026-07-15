@@ -41,3 +41,31 @@ jobs:
       id-token: write
     steps:
       - run: echo "thank you"
+
+  
+  record-approval:
+    needs: approval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and record approval details
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get the latest deployment for this ref+environment
+          deployment_id=$(gh api \
+            "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.sha }}&per_page=1" \
+            --jq '.[0].id')
+
+          # Approval reviews contain user, state, comment, and timestamps
+          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" > /dev/null 2>&1 || true
+
+          gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+            --jq '.[] | select(.state=="approved") |
+              "Approver: \(.user.login)\nDate: \(.updated_at)\nComment: \(.comment)"' \
+            | tee approval-record.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload approval record
+        uses: actions/upload-artifact@v4
+        with:
+          name: approval-record
+          path: approval-record.txt
