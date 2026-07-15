@@ -82,7 +82,7 @@ jobs:
             --jq '.[] | select(.state=="approved")')
           echo "approvals: $approvals"
           echo "...${{ github.repository }}"
-          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}statuses" --verbose
+          gh api "/repos/${{ github.repository }}/deployments/$deployment_id/statuses" --verbose
 
 
   
