@@ -84,8 +84,7 @@ jobs:
             --jq '.[] | select(.state=="approved")'
           
           gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" \
-            --jq 'sort_by(.created_at)
-                  | map(select(.state != "waiting"))
+            --jq 'sort_by(.created_at) | map(select(.state != "waiting"))'
 
   
   approval_b:
