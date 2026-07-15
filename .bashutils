@@ -1,0 +1,938 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2034,SC1090,SC2181,SC2154,SC2164,SC2155,SC2129
+
+############################
+#   name: linter_python_ruff_uv
+#   purpose: runs ruff linter in check mode (no auto-fix) on the project using uv
+#   parameters: none
+#   requires: uv (with ruff), this_folder
+############################
+linter_python_ruff_uv(){
+  info "[linter_python_ruff_uv|in]"
+  _pwd=$(pwd)
+
+  cd "$this_folder"
+
+  uv run ruff check
+  local result="$?"
+  if [ "$result" -ne "0" ] ; then err "[linter_python_ruff_uv] ruff linter check had issues"; fi
+
+  cd "$_pwd"
+
+  local msg="[linter_python_ruff_uv|out] => ${result}"
+  [[ "$result" -ne "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+############################
+#   name: sast_check_snyk
+#   purpose: runs a Static Application Security Testing (SAST) scan with snyk to detect common security issues in Python source code
+#   parameters: $1 (Snyk organization ID), $2 (Snyk endpoint), $3 (Snyk API token)
+#   requires: snyk, this_folder
+############################
+sast_check_snyk(){
+  info "[sast_check_snyk|in] ($1, $2, ${3:0:14})"
+
+  [ -z "$1" ] && err "[sast_check_snyk] missing argument SNYK_ORG_ID" && exit 1
+  local SNYK_ORG_ID="$1"
+  [ -z "$2" ] && err "[sast_check_snyk] missing argument SNYK_ENDPOINT" && exit 1
+  local SNYK_ENDPOINT="$2"
+  [ -z "$3" ] && err "[sast_check_snyk] missing argument SNYK_API_TOKEN" && exit 1
+  local SNYK_API_TOKEN="$3"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  snyk config set org="$SNYK_ORG_ID" && \
+    snyk config set endpoint="$SNYK_ENDPOINT" && \
+        snyk auth "$SNYK_API_TOKEN" && \
+          snyk code test "$SRC_DIR" --severity-threshold=high
+
+  result="$?"
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[sast_check_snyk|out]  => ${result}" && exit 1
+  echo "[sast_check_snyk|out] => $result"
+}
+
+############################
+#   name: linter_bash_shellcheck
+#   purpose: runs shellcheck on bash code to detect potential issues
+#   parameters: none
+#   requires: shellcheck, this_folder
+############################
+linter_bash_shellcheck(){
+  info "[linter_bash_shellcheck|in]"
+  _pwd=$(pwd)
+  cd "$this_folder" || exit 1
+
+  shellcheck ./.bashutils ./*.sh
+  local result="$?"
+  if [ "$result" -ne "0" ] ; then err "[linter_bash_shellcheck] shellcheck had issues"; fi
+
+  cd "$_pwd"
+
+  local msg="[linter_bash_shellcheck|out] => ${result}"
+  [[ "$result" -ne "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+############################
+#   name: sca_check_snyk
+#   purpose: runs a Software Composition Analysis (SCA) scan with snyk to detect known vulnerabilities in dependencies;
+#   parameters: $1 (Snyk organization ID), $2 (Snyk endpoint), $3 (Snyk API token)
+#   requires: snyk, this_folder
+############################
+sca_check_snyk(){
+  info "[sca_check_snyk|in] ($1, $2, ${3:0:14})"
+
+  [ -z "$1" ] && err "[sca_check_snyk] missing argument SNYK_ORG_ID" && exit 1
+  local SNYK_ORG_ID="$1"
+  [ -z "$2" ] && err "[sca_check_snyk] missing argument SNYK_ENDPOINT" && exit 1
+  local SNYK_ENDPOINT="$2"
+  [ -z "$3" ] && err "[sca_check_snyk] missing argument SNYK_API_TOKEN" && exit 1
+  local SNYK_API_TOKEN="$3"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  snyk config set org="$SNYK_ORG_ID" && \
+    snyk config set endpoint="$SNYK_ENDPOINT" && \
+        snyk auth "$SNYK_API_TOKEN" && \
+          snyk test --command=python --severity-threshold=high
+
+  result="$?"
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[sca_check_snyk|out]  => ${result}" && exit 1
+  echo "[sca_check_snyk|out] => $result"
+}
+
+############################
+#   name: pytest_uv
+#   purpose: runs pytest unit tests via uv with coverage reporting (term-missing, html, xml) and JUnit XML output
+#   parameters: $1 (test directory, default: test), $2 (source directory for coverage, default: src)
+#   requires: uv (with pytest, pytest-cov), this_folder
+############################
+pytest_uv(){
+  info "[pytest_uv|in] ($1)"
+
+  [ -z "$1" ] && err "[pytest_uv] must provide FOLDER parameter" && exit 1
+  local FOLDER="$1"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  uv run pytest "$FOLDER" -x -s --gherkin-terminal-reporter -v --durations=0 \
+    --cov=src --cov-config=pyproject.toml --junitxml=tests-results.xml --cov-report=xml \
+    --cov-report=html --cov-report=term-missing
+  local result="$?"
+  [ "$result" -ne "0" ] && err "[pytest_uv] tests failed"
+
+  cd "$_pwd"
+
+  local msg="[pytest_uv|out] => ${result}"
+  [ "$result" -ne "0" ] && info "$msg" && exit 1
+  info "$msg"
+}
+
+#############################
+#   name: check_features_mapping_uv
+#   purpose: checks that all Gherkin feature scenarios have corresponding acceptance tests and that all steps are defined in scenarios, using uv to run pytest with the --generate-missing option; parses the output to identify missing mappings and returns an error if any are found
+#   parameters: $1 (features directory, default: $FEATURES_FOLDER), $2 (acceptance tests directory, default: $ACCEPTANCE_TESTS_FOLDER)
+#   requires: uv (with pytest and the gherkin-terminal-reporter), this_folder
+#############################
+check_features_mapping_uv(){
+  info "[check_features_mapping_uv|in] ($1,$2)"
+
+  local FEATURES_DIR="${1:-$FEATURES_FOLDER}"
+  local ACCEPTANCE_TESTS_DIR="${2:-$ACCEPTANCE_TESTS_FOLDER}"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  local result=0
+  output=$(uv run pytest --generate-missing --feature "$FEATURES_DIR" "$ACCEPTANCE_TESTS_DIR" | grep -Ei "is not bound|is not Defined|is not found")
+  [ -n "$output" ] && result=1 && err "[check_features_mapping_uv] mapping check failed !!!" && echo "$output"
+
+  cd "$_pwd"
+  local msg="[check_features_mapping_uv|out] => ${result}"
+  [[ ! "$result" -eq "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+############################
+#   name: pytest_coverage_print_uv
+#   purpose: prints a coverage report with missing lines and generates html + xml reports via uv
+#   parameters: $1 (source directory for coverage, default: src)
+#   requires: uv (with coverage, and a .coverage data file already generated)
+############################
+pytest_coverage_print_uv()
+{
+  info "[pytest_coverage_print_uv|in] ($1)"
+  [ -z "$1" ] && err "[pytest_coverage_print_uv] missing argument SRC_DIR" && exit 1
+  local SRC_DIR=$1
+
+
+  uv run coverage report --show-missing --include="$SRC_DIR/*"
+  uv run coverage html --include="$SRC_DIR/*"
+  uv run coverage xml --include="$SRC_DIR/*"
+  result="$?"
+  [ "$result" -ne "0" ] && exit 1
+  info "[pytest_coverage_print_uv|out] => $result"
+  return ${result}
+}
+
+############################
+#   name: pytest_coverage_check_uv
+#   purpose: asserts that total coverage meets a minimum threshold via uv; generates a coverage badge SVG; exits with error if below threshold
+#   parameters: $1 (minimum coverage percentage, integer, e.g. 80)
+#   requires: uv (with coverage, genbadge, and a .coverage data file already generated)
+############################
+pytest_coverage_check_uv()
+{
+  info "[pytest_coverage_check_uv|in] ($1)"
+  [ -z "$1" ] && err "[pytest_coverage_check_uv] missing argument THRESHOLD" && exit 1
+
+  local THRESHOLD=$1
+  local score
+  score=$(uv run coverage report | awk '$1 == "TOTAL" {print $NF+0}')
+  local result="$?"
+  [ "$result" -ne "0" ] && exit 1
+  if (( THRESHOLD > score )); then
+    err "[pytest_coverage_check_uv] $score doesn't meet $THRESHOLD"
+    exit 1
+  fi
+  info "[pytest_coverage_check_uv|out] => $score"
+}
+
+############################
+#   name: build_uv
+#   purpose: cleans dist/ and builds the Python package using 'uv build'
+#   parameters: none
+#   requires: uv, this_folder
+############################
+build_uv(){
+  info "[build_uv|in]"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  rm -rf dist/*
+  uv build
+  local result="$?"
+  [[ ! "$result" -eq "0" ]] && err "[build_uv] build failed"
+
+  cd "$_pwd"
+  local msg="[build_uv|out] => ${result}"
+  [[ ! "$result" -eq "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+############################
+#   name: pyproj_report_empty_header
+#   purpose: generates a markdown test report header with package name, version, and timestamp read from pyproject.toml
+#   parameters: $1 (output markdown filename)
+#   requires: uv (with tomllib), this_folder
+############################
+pyproj_report_empty_header(){
+  info "[pyproj_report_empty_header|in] ($1)"
+
+  [[ -z "$1" ]] && err "[pyproj_report_empty_header] must provide DOCNAME" && exit 1
+  local DOCNAME="$1"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  touch "${DOCNAME}"
+  
+  cd "$_pwd"
+  info "[pyproj_report_empty_header|out]"
+}
+
+############################
+#   name: pyproj_report_header
+#   purpose: generates a markdown test report header with package name, version, timestamp, repository, branch, and commit ID read from pyproject.toml
+#   parameters: $1 (output markdown filename), $2 (repository name), $3 (branch name), $4 (commit ID)
+#   requires: uv (with tomllib), this_folder
+############################
+pyproj_report_header(){
+  info "[pyproj_report_header|in] ($1, $2, $3, $4, $5)"
+
+  [[ -z "$1" ]] && err "[pyproj_report_header] must provide DOCNAME" && exit 1
+  local DOCNAME="$1"
+
+  [[ -z "$2" ]] && err "[pyproj_report_header] must provide REPO" && exit 1
+  local REPO="$2"
+
+  [[ -z "$3" ]] && err "[pyproj_report_header] must provide BRANCH" && exit 1
+  local BRANCH="$3"
+
+  [[ -z "$4" ]] && err "[pyproj_report_header] must provide COMMIT" && exit 1
+  local COMMIT="$4"
+
+  local TITLE="Test Report"
+  [ -n "$5" ] && TITLE="$5"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  local version=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
+  local package=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['name'])")
+  [ "$?" -ne "0" ] && err "[pyproj_report_header] failed to get proj vars from pyproject.toml" && exit 1
+
+  echo "## ${TITLE}" > "${DOCNAME}"
+  echo "- Package: ${package}" >> "$DOCNAME"
+  echo "- Version: ${version}" >> "$DOCNAME"
+  echo "- Timestamp: $(date)" >> "$DOCNAME"
+  echo "- Repository: ${REPO}" >> "$DOCNAME"  
+  echo "- Branch: ${BRANCH}" >> "$DOCNAME"
+  echo "- Commit id: ${COMMIT}" >> "$DOCNAME"
+  
+  cd "$_pwd"
+  info "[pyproj_report_header|out]"
+}
+
+##############################
+#   name: pyproj_report_footer
+#   purpose: generates a markdown test report footer indicating success
+#   parameters: $1 (output markdown filename)
+#   requires: this_folder
+##############################
+pyproj_report_footer(){
+  info "[pyproj_report_footer|in] ($1, $2)"
+
+  [[ -z "$1" ]] && err "[pyproj_report_footer] must provide DOCNAME" && exit 1
+  local DOCNAME="$1"
+
+  local TITLE="Test Report"
+  [ -n "$5" ] && TITLE="$5"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+  echo "## ${TITLE} - Success" >> "${DOCNAME}"
+  cd "$_pwd"
+  info "[pyproj_report_footer|out]"
+}
+
+append_files_sequentially(){
+  info "[append_files_sequentially|in] ($(IFS=,; echo "$*"))"
+  [ -z "$1" ] && err "[append_files_sequentially] missing argument TARGET" && exit 1
+  local TARGET="$1"
+  shift
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  cat /dev/null > "$TARGET"
+
+  for param in "$@"; do
+    cat "$param" >> "$TARGET"
+  done
+  result="$?"
+  
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[append_files_sequentially|out]  => ${result}" && exit 1
+  info "[append_files_sequentially|out] => ${result}"
+}
+
+############################
+#   name: function_report_wrapper
+#   purpose: wraps a command invocation, appending its stdout output to a report file with labelled start/end section markers; propagates the command's exit code
+#   parameters: $1 (report file path to append to), $2 (section label), $3+ (command and arguments to run)
+#   returns: exit code of the wrapped command
+############################
+function_report_wrapper(){
+  [ -z "$1" ] && { err "[function_report_wrapper] missing report path argument"; return 1; }
+  local report_path="$1"
+  shift
+  [ -z "$1" ] && { err "[function_report_wrapper] missing report section name argument"; return 1; }
+  local section_name="$1"
+  shift
+  [ "$#" -lt 1 ] && { err "[function_report_wrapper] missing command to run"; return 1; }
+
+  {
+    echo "## $section_name - section start"
+    echo
+    "$@"
+    local cmd_rc=$?
+    echo
+    echo "## $section_name - section end"
+    echo
+    exit "$cmd_rc"
+  } | tee -a "$report_path"
+
+  local result=${PIPESTATUS[0]}
+  return "$result"
+}
+
+############################
+#   name: generate_pdf_from_md
+#   purpose: converts a markdown file to a PDF using dataops python library
+#   parameters: $1 (input markdown file path), $2 (output PDF file path)
+#   requires: uv (with dataops)
+############################
+generate_pdf_from_md() {
+  info "[generate_pdf_from_md|in] ($1, $2)"
+  
+  [ -z "$1" ] && { err "[generate_pdf_from_md] missing input_md argument"; return 1; }
+  local input_md="$1"
+  [ -z "$2" ] && { err "[generate_pdf_from_md] missing output_pdf argument"; return 1; }
+  local output_pdf="$2"
+
+  uv run python -c "from dataops.cicd.markdown_to_pdf import convert; convert('$input_md', '$output_pdf')"
+  [ "$?" -ne "0" ] && err "[generate_pdf_from_md] failed to generate PDF from markdown" && exit 1
+  info "[generate_pdf_from_md|out]"
+}
+
+############################
+#   name: generate_pr_approvals_md
+#   purpose: generates a markdown report of PR approvals for a given repository branch using dataops python library
+#   parameters: $1 (repository name), $2 (branch name), $3 (output markdown file path)
+#   requires: uv (with dataops)
+############################
+generate_pr_approvals_md() {
+  info "[generate_pr_approvals_md|in] ($1, $2, $3)"
+  local repo="$1"
+  local branch="$2"
+  local output_file="$3"
+
+  if [ -z "$repo" ] || [ -z "$branch" ] || [ -z "$output_file" ]; then
+    err "[generate_pr_approvals_md] missing required arguments: repo, branch, output_file" && exit 1
+  fi
+
+  uv run python -c "from dataops.cicd.pr_report_generator import generate_pr_approvals_md; generate_pr_approvals_md('$repo', '$branch', '$output_file')"
+  [ "$?" -ne "0" ] && err "[generate_pr_approvals_md] failed to generate PR approvals report" && exit 1
+  info "[generate_pr_approvals_md|out]"
+}
+
+############################
+#   name: collect_dot_git
+#   purpose: archives the .git directory of the project into a compressed tar archive
+#   parameters: $1 (output archive filename, default: git.tar.gz)
+#   requires: tar, this_folder
+############################
+collect_dot_git(){
+  info "[collect_dot_git|in] ($1)"
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  local OUTPUT_FILE="${1:-git.tar.gz}"
+  tar czpvf "$OUTPUT_FILE" .git 
+  local result="$?"
+
+  cd "$_pwd"
+  local msg="[collect_dot_git|out] => ${result}"
+  [[ ! "$result" -eq "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+############################
+#   name: create_release_documentation
+#   purpose: assembles release documentation artifacts (git archive, PR approval PDF, QA PDF) into a single directory and compresses it into a tar archive
+#   parameters: $1 (git archive tar file path), $2 (PR approvals PDF file path), $3 (QA report PDF file path), $4 (output target directory)
+#   requires: tar, this_folder
+############################
+create_release_documentation(){
+  info "[create_release_documentation|in] ($1, $2, $3, $4)"
+
+  local GIT_TAR="$1"
+  local PRS_PDF="$2"
+  local QA_PDF="$3"
+  local TARGET_DIR="$4"
+
+  if [ -z "$GIT_TAR" ] || [ -z "$PRS_PDF" ] || [ -z "$QA_PDF" ] || [ -z "$TARGET_DIR" ]; then
+    err "[create_release_documentation] missing required arguments: GIT_TAR, PRS_PDF, QA_PDF, TARGET_DIR" && exit 1
+  fi
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  rm -f "$TARGET_DIR"
+  mkdir -p "$TARGET_DIR"
+  mv "$GIT_TAR" "$TARGET_DIR/"
+  mv "$PRS_PDF" "$TARGET_DIR/"
+  mv "$QA_PDF" "$TARGET_DIR/"
+
+  tar czpvf "${TARGET_DIR}.tar.gz" "$TARGET_DIR" 
+  local result="$?"
+  cd "$_pwd"
+
+  local msg="[create_release_documentation|out] => ${result}"
+  [[ ! "$result" -eq "0" ]] && info "$msg" && exit 1
+  info "$msg"
+}
+
+create_github_release(){
+  info "[create_github_release|in] ($1)"
+
+  [ -z "$1" ] && err "[create_github_release] missing argument VERSION" && exit 1
+  local VERSION="$1"
+  local is_draft="false"
+  if [ "$RELEASE_DRAFT" = "true" ]; then
+    is_draft="true"
+  fi
+  
+  gh release create "$VERSION" "dist"/* --title "Release $VERSION" --draft="$is_draft" --notes "check release content for more details"
+  [ "$?" -ne "0" ] && err "[create_github_release] failed to create release" && exit 1
+  
+  info "[create_github_release|out]"
+}
+
+download_github_release_files(){
+  info "[download_github_release_files|in] ($1, $2, $3, ${4:0:7})"
+
+  [ -z "$1" ] && err "[download_github_release_files] missing argument REPO" && exit 1
+  local REPO="$1"
+  [ -z "$2" ] && err "[download_github_release_files] missing argument VERSION" && exit 1
+  local VERSION="$2"
+  [ -z "$3" ] && err "[download_github_release_files] missing argument TARGET_DIR" && exit 1
+  local TARGET_DIR="$3"
+  
+  _pwd=$(pwd)
+  cd "$TARGET_DIR"
+
+  local AUTH_HEADER=""
+  [ -n "$4" ] && AUTH_HEADER="-H \"Authorization: token $4\""
+
+  # Use assets API with Accept: application/octet-stream to avoid redirect to
+  # objects.githubusercontent.com (which may be blocked by proxies like Zscaler)
+  local release_json
+  release_json=$(eval curl -fsSL "$AUTH_HEADER" "\"https://api.github.com/repos/$REPO/releases/tags/$VERSION\"")
+  result="$?"
+  if [ "$result" -ne "0" ]; then
+    err "[download_github_release_files] failed to fetch release metadata"
+    cd "$_pwd"
+    return 1
+  fi
+
+  echo "$release_json" | python3 -c "
+import sys, json
+assets = json.load(sys.stdin).get('assets', [])
+for a in assets:
+    print(a['id'], a['name'])
+" | while read -r asset_id asset_name; do
+    info "[download_github_release_files] downloading asset: $asset_name (id: $asset_id)"
+    eval curl -fsSL "$AUTH_HEADER" \
+      -H "\"Accept: application/octet-stream\"" \
+      -o "\"$asset_name\"" \
+      "\"https://api.github.com/repos/$REPO/releases/assets/$asset_id\""
+    if [ "$?" -ne "0" ]; then
+      err "[download_github_release_files] failed to download asset: $asset_name"
+      cd "$_pwd"
+      return 1
+    fi
+  done
+  result="$?"
+  cd "$_pwd"
+
+  [ "$result" -ne "0" ] && err "[download_github_release_files|out] => ${result}" && exit 1
+  info "[download_github_release_files|out] => ${result}"
+}
+
+############################
+#   name: create_release_python_uv
+#   purpose: creates a GitHub release with the current package version, attaching built distribution files from dist/; requires that GITHUB_TOKEN is set in the environment for authentication
+#   parameters: none
+#   requires: gh CLI, uv (to read version from pyproject.toml), this_folder
+############################
+create_release_python_uv(){
+  info "[create_release_python_uv|in]"
+
+  local is_draft="false"
+  if [ "$RELEASE_DRAFT" = "true" ]; then
+    is_draft="true"
+  fi
+  
+  local version=$(uv run python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
+  info "[create_release_python_uv] creating release version: $version"
+  create_github_release "$version"
+  [ "$?" -ne "0" ] && err "[create_release_python_uv] failed to create release" && exit 1
+
+  info "[create_release_python_uv|out]"
+}
+
+create_file_sha(){
+  info "[create_file_sha|in] ($1)"
+  local FILE_NAME="$1"
+  if [ -z "$FILE_NAME" ]; then
+    err "[create_file_sha] missing required argument: FILE_NAME" && exit 1
+  fi
+  local SUFFIX="${2:-.checksum}"
+  
+  if [ ! -f "$FILE_NAME" ]; then
+    err "[create_file_sha] file not found: $FILE_NAME" && exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    cd "$this_folder" || return 1
+    sha256sum "$FILE_NAME" > "${FILE_NAME}${SUFFIX}"
+    checksum_result="$?"
+    cd "$_pwd" || return 1
+    if [ "$checksum_result" -ne 0 ]; then
+      return 1
+    fi
+  else
+    err "[create_file_sha] please install sha256sum to generate checksum file"
+    return 1
+  fi
+  info "[create_file_sha|out] => 0"
+}
+
+databricks_volume_folder_reset(){
+  info "[databricks_volume_folder_reset|in] ($1)"
+
+  [ -z "$1" ] && err "[databricks_volume_folder_reset] missing argument TARGET" && exit 1
+  local TARGET="$1"
+
+  if [[ "${TARGET:0:5}" != "dbfs:" ]]; then
+      info "[databricks_volume_folder_reset] target does not start with dbfs prefix"
+      TARGET="dbfs:$TARGET"
+  fi
+  databricks fs rm -r "$TARGET" 2>/dev/null
+
+  info "[databricks_volume_folder_reset] recreating volume folder: $TARGET ..."
+  databricks fs mkdirs "$TARGET"
+  result="$?"
+
+  if [ "$result" -ne "0" ]; then
+    info "[databricks_volume_folder_reset] could not create volume folder $TARGET"
+  else
+    info "[databricks_volume_folder_reset] created volume folder $TARGET"
+  fi
+
+  [ "$result" -ne "0" ] && err "[databricks_volume_folder_reset|out]  => ${result}" && exit 1
+  info "[databricks_volume_folder_reset|out] => ${result}"
+}
+
+databricks_volume_folder_synch(){
+  info "[databricks_volume_folder_synch|in] ($1,$2)"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  [ -z "$1" ] && err "[databricks_volume_folder_synch] missing argument SRC" && cd "$_pwd" && exit 1
+  local SRC="$1"
+  [ -z "$2" ] && err "[databricks_volume_folder_synch] missing argument TARGET" && cd "$_pwd" && exit 1
+  local TARGET="$2"
+
+  if [[ "${TARGET:0:5}" != "dbfs:" ]]; then
+      info "[databricks_volume_folder_synch] target does not start with dbfs prefix"
+      TARGET="dbfs:$TARGET"
+  fi
+
+  for file in "${SRC}"/*; do
+      if [[ -f "$file" ]]; then
+          local filename=$(basename "$file")
+          databricks fs cp "$file" "$TARGET/$filename" --overwrite
+          result="$?"
+          [ "$result" -ne "0" ] && err "[databricks_volume_folder_synch|out]  => ${result}" && cd "$_pwd" && exit 1
+      fi
+  done
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[databricks_volume_folder_synch|out]  => ${result}" && exit 1
+  info "[databricks_volume_folder_synch|out] => ${result}"
+}
+
+databricks_volume_folder_rec_synch(){
+  info "[databricks_volume_folder_rec_synch|in] ($1,$2)"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  [ -z "$1" ] && err "[databricks_volume_folder_rec_synch] missing argument SRC" && cd "$_pwd" && exit 1
+  local SRC="$1"
+  [ -z "$2" ] && err "[databricks_volume_folder_rec_synch] missing argument TARGET" && cd "$_pwd" && exit 1
+  local TARGET="$2"
+
+  if [[ "${TARGET:0:5}" != "dbfs:" ]]; then
+      info "[databricks_volume_folder_rec_synch] target does not start with dbfs prefix"
+      TARGET="dbfs:$TARGET"
+  fi
+
+  local result=0
+  local src_path="${SRC}"
+
+  # Find all .json files recursively and copy them preserving directory structure
+  while IFS= read -r -d '' file; do
+      # Get the relative path from the source directory
+      local relative_path="${file#"$src_path"/}"
+      local target_file="$TARGET/$relative_path"
+      local target_dir=$(dirname "$target_file")
+
+      # Create target directory if it doesn't exist
+      databricks fs mkdirs "$target_dir"
+      result="$?"
+      if [ "$result" -ne "0" ]; then
+          err "[databricks_volume_folder_rec_synch] could not create directory $target_dir"
+          cd "$_pwd"
+          exit 1
+      fi
+
+      # Copy the file
+      info "[databricks_volume_folder_rec_synch] copying $file to $target_file"
+      databricks fs cp "$file" "$target_file" --overwrite
+      result="$?"
+      if [ "$result" -ne "0" ]; then
+          err "[databricks_volume_folder_rec_synch] could not copy $file to $target_file"
+          cd "$_pwd"
+          exit 1
+      fi
+  done < <(find "$src_path" -type f -name "*.json" -print0)
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[databricks_volume_folder_rec_synch|out]  => ${result}" && exit 1
+  info "[databricks_volume_folder_rec_synch|out] => ${result}"
+}
+
+databricks_bundle_deploy(){
+  info "[databricks_bundle_deploy|in]"
+
+  local BUNDLE_TARGET="$ENVIRONMENT"
+  [ -n "$1" ]  && BUNDLE_TARGET="$1"
+
+  local BUNDLE_FOLDER="$this_folder/$DATABRICKS_BUNDLES_DIR"
+  [ -n "$2" ] && BUNDLE_FOLDER="$2"
+
+  info "[databricks_bundle_deploy] BUNDLE_FOLDER: $BUNDLE_FOLDER   BUNDLE_TARGET: $BUNDLE_TARGET"
+
+  _pwd=$(pwd)
+  cd "$BUNDLE_FOLDER"
+
+  databricks bundle validate --target "$BUNDLE_TARGET" --debug && \
+    databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve --fail-on-active-runs --force-lock --debug
+  local result="$?"
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[databricks_bundle_deploy|out]  => ${result}" && exit 1
+  info "[databricks_bundle_deploy|out] => ${result}"
+}
+
+databricks_bundle_destroy(){
+  info "[databricks_bundle_destroy|in]"
+
+  local BUNDLE_TARGET="$ENVIRONMENT"
+  [ -n "$1" ]  && BUNDLE_TARGET="$1"
+
+  local BUNDLE_FOLDER="$this_folder/$DATABRICKS_BUNDLES_DIR"
+  [ -n "$2" ] && BUNDLE_FOLDER="$2"
+
+  info "[databricks_bundle_destroy] BUNDLE_FOLDER: $BUNDLE_FOLDER   BUNDLE_TARGET: $BUNDLE_TARGET"
+
+  _pwd=$(pwd)
+  cd "$BUNDLE_FOLDER"
+
+  databricks bundle destroy --target "$BUNDLE_TARGET" --auto-approve --force-lock --debug
+
+  result="$?"
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[databricks_bundle_destroy|out]  => ${result}" && exit 1
+  info "[databricks_bundle_destroy|out] => ${result}"
+}
+
+databricks_workspace_notebook_import(){
+  info "[databricks_workspace_notebook_import|in] ($1,$2,$3,$4,$5)"
+
+  [ -z "$1" ] && err "[databricks_workspace_notebook_import] missing argument ARTIFACT" && exit 1
+  local ARTIFACT="$1"
+  [ -z "$2" ] && err "[databricks_workspace_notebook_import] missing argument TARGET_PARENT_URL" && exit 1
+  local TARGET_PARENT_URL="$2"
+  [ -z "$3" ] && err "[databricks_workspace_notebook_import] missing argument FORMAT" && exit 1
+  local FORMAT="$3"
+  [ -z "$4" ] && err "[databricks_workspace_notebook_import] missing argument LANGUAGE" && exit 1
+  local LANGUAGE="$4"
+  [ -z "$5" ] && err "[databricks_workspace_notebook_import] missing argument RUN_SERVICE_PRINCIPAL" && exit 1
+  local RUN_SERVICE_PRINCIPAL="$5"
+
+  local ARTIFACT_NAME=$(basename "$ARTIFACT")
+
+  info "[databricks_workspace_notebook_import] checking for workspace folder: $TARGET_PARENT_URL"
+  databricks workspace list "$TARGET_PARENT_URL" --output json
+  result="$?"
+  if [ "$result" -ne "0" ]; then
+    info "[databricks_workspace_notebook_import] workspace folder does not exist ($TARGET_PARENT_URL), creating it..."
+    databricks workspace mkdirs "$TARGET_PARENT_URL"
+    result="$?"
+    if [ "$result" -ne "0" ]; then
+      info "[databricks_workspace_notebook_import] could not create workspace folder $TARGET_PARENT_URL"
+      err "[databricks_workspace_notebook_import|out]  => ${result}" && exit 1
+    else
+      info "[databricks_workspace_notebook_import] created workspace folder $TARGET_PARENT_URL"
+    fi
+  fi
+
+  info "[databricks_workspace_notebook_import] importing artifact to: ${TARGET_PARENT_URL}/${ARTIFACT_NAME}"
+  databricks workspace import "${TARGET_PARENT_URL}/${ARTIFACT_NAME}" --format "$FORMAT" \
+    --language "$LANGUAGE" --file "${ARTIFACT}" --overwrite
+  result="$?"
+  [ "$result" -ne "0" ] && err "[databricks_workspace_notebook_import|out]  => ${result}" && exit 1
+
+  artifact_id=$(databricks workspace list "$TARGET_PARENT_URL" --output json | jq -r ".[] | select(.path == \"${TARGET_PARENT_URL}/${ARTIFACT_NAME}\") | .object_id")
+  info "[databricks_workspace_notebook_import] artifact ID: $artifact_id"
+
+  info "[databricks_workspace_notebook_import] setting artifact run permission to service principal: $RUN_SERVICE_PRINCIPAL"
+  databricks workspace update-permissions notebooks "$artifact_id" --json "{\"access_control_list\": [{\"service_principal_name\": \"$RUN_SERVICE_PRINCIPAL\", \"permission_level\": \"CAN_RUN\"}]}"
+  result="$?"
+  [ "$result" -ne "0" ] && err "[databricks_workspace_notebook_import|out]  => ${result}" && exit 1
+  info "[databricks_workspace_notebook_import|out] => ${result}"
+}
+
+databricks_volume_folder_remove(){
+  info "[databricks_volume_folder_remove|in] ($1)"
+  [ -z "$1" ] && err "[databricks_volume_folder_remove] missing argument TARGET" && exit 1
+  local TARGET="$1"
+
+  if [[ "${TARGET:0:5}" != "dbfs:" ]]; then
+      info "[databricks_volume_folder_remove] target does not start with dbfs prefix"
+      TARGET="dbfs:$TARGET"
+  fi
+  databricks fs rm -r "$TARGET"
+  result="$?"
+  [ "$result" -ne "0" ] && err "[databricks_volume_folder_remove|out]  => ${result}" && exit 1
+  info "[databricks_volume_folder_remove|out] => ${result}"
+}
+
+databricks_volume_file_download(){
+  info "[databricks_volume_file_download|in] ($1, $2)"
+  
+  [ -z "$1" ] && err "[databricks_volume_file_download] missing argument SRC" && exit 1
+  local SRC="$1"
+  [ -z "$2" ] && err "[databricks_volume_file_download] missing argument DEST" && exit 1
+  local DEST="$2"
+
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  if [[ "${SRC:0:5}" != "dbfs:" ]]; then
+      info "[databricks_volume_file_download] source does not start with dbfs prefix"
+      SRC="dbfs:$SRC"
+  fi
+
+  databricks fs cp "$SRC" "$DEST"
+  result="$?"
+
+  cd "$_pwd"
+  [ "$result" -ne "0" ] && err "[databricks_volume_file_download|out]  => ${result}" && exit 1
+  info "[databricks_volume_file_download|out] => ${result}"
+}
+
+wait_for_job_task(){
+  [ -z "$1" ] && err "[wait_for_job_task] missing argument RUN_ID" && exit 1
+  local RUN_ID=$1
+  [ -z "$2" ] && err "[wait_for_job_task] missing argument TIMEOUT_SECONDS" && exit 1
+  local TIMEOUT_SECONDS=$2
+  [ -z "$3" ] && err "[wait_for_job_task] missing argument WAIT_SECONDS" && exit 1
+  local WAIT_SECONDS=$3
+  local TASK_KEY=
+  [ -n "$4" ] && TASK_KEY="$4"
+
+  start_time=$(date +%s)
+  local result=1
+  while [ $(($(date +%s) - start_time)) -lt "$TIMEOUT_SECONDS" ]; do
+    
+    if [ -n "$TASK_KEY" ]; then
+      status=$(databricks jobs get-run "$RUN_ID" | jq "[ .tasks[] | select(.task_key == \"$TASK_KEY\")][0] | .status.state")
+    else
+      status=$(databricks jobs get-run "$RUN_ID" | jq ".status.state")
+    fi
+    if [[ "$status" == "\"SUCCESS\"" || "$status" == "\"TERMINATED\"" ]]; then
+      result=0
+      break
+    elif [[ "$status" == "\"FAILED\"" || "$status" == "\"EXCLUDED\"" || "$status" == "\"TIMEDOUT\"" || "$status" == "\"CANCELED\"" || "$status" == "\"UPSTREAM_FAILED\"" ]]; then
+        err "[wait_for_job_task|out] job failed with status: $status" && exit 1
+    fi
+
+    sleep "$WAIT_SECONDS"
+  done
+  [ "$result" -ne "0" ] && err "[wait_for_job_task|out] job failed" && exit 1
+}
+
+run_notebook_task(){
+  [ -z "$1" ] && err "[run_notebook_task] missing argument NOTEBOOK_PATH" && exit 1
+  local NOTEBOOK_PATH="$1"
+  [ -z "$2" ] && err "[run_notebook_task] missing argument BASE_PARAMS" && exit 1
+  local BASE_PARAMS="$2"
+  [ -z "$3" ] && err "[run_notebook_task] missing argument NODE_TYPE_ID" && exit 1
+  local NODE_TYPE_ID="$3"
+  [ -z "$4" ] && err "[run_notebook_task] missing argument WORKERS" && exit 1
+  local WORKERS="$4"
+  [ -z "$5" ] && err "[run_notebook_task] missing argument SPARK_VERSION" && exit 1
+  local SPARK_VERSION="$5"
+  [ -z "$6" ] && err "[run_notebook_task] missing argument RUN_NAME" && exit 1
+  local RUN_NAME="$6"
+  [ -z "$7" ] && err "[run_notebook_task] missing argument TASK_KEY" && exit 1
+  local TASK_KEY="$7"
+
+  local TIMEOUT_SECS=1200
+  [ -n "$8" ] && TIMEOUT_SECS="$8"
+  
+  [ -z "$7" ] && err "[run_notebook_task] missing argument TASK_KEY" && exit 1
+  local TASK_KEY="$7"
+
+  local json_param="{
+    \"run_name\": \"$RUN_NAME\",
+    \"tasks\": [
+      {
+      \"task_key\": \"$TASK_KEY\",
+      \"new_cluster\": {
+        \"spark_version\": \"$SPARK_VERSION\",\"node_type_id\": \"$NODE_TYPE_ID\",\"num_workers\": $WORKERS},
+        \"notebook_task\": {
+          \"notebook_path\": \"$NOTEBOOK_PATH\",
+          \"base_parameters\": $BASE_PARAMS
+        }
+      }
+    ]
+  }"
+  #info "[run_notebook_task] json_param: $json_param"
+  #exit 1
+  local run_id=$(databricks jobs submit --no-wait --json "$json_param" | jq -r ".run_id")
+  result="$?"
+  #info "[run_notebook_task] run_id: $run_id"
+  [ "$result" -ne "0" ] && err "[call_notebook_task|out]  couldn't find run id" && exit 1
+
+  wait_for_job_task "$run_id" "$TIMEOUT_SECS" 30 "$TASK_KEY"
+  task_run_id=$(databricks jobs get-run "$run_id" | jq "[ .tasks[] | select(.task_key == \"$TASK_KEY\")][0] | .run_id")
+  [ "$?" -ne "0" ] && err "[run_notebook_task|out] couldn't get task run id" && exit 1
+  local call_output=$(databricks jobs get-run-output "$task_run_id")
+  # info "[run_notebook_task] call_output: $call_output"
+  local output=$(echo "$call_output" | jq ".notebook_output.result")
+  echo "${output}"
+}
+
+call_databricks_job() {
+  _pwd=$(pwd)
+  cd "$this_folder"
+
+  [ -z "$1" ] && err "[call_databricks_job] missing argument JOB_NAME" && exit 1
+  local JOB_NAME="$1"
+  [ -z "$2" ] && err "[call_databricks_job] missing argument JOB_PARAMS" && exit 1
+  local JOB_PARAMS="$2"
+
+  local job_id=$(databricks jobs list | grep "$JOB_NAME" | awk '{print $1}')
+  local result="$?"
+  # info "[call_databricks_job] => $job_id"
+  [ "$result" -ne "0" ] && err "[call_databricks_job|out] couldn't find job id" && exit 1
+
+  run_id=$(databricks jobs run-now --no-wait -o json --json "{\"job_id\": $job_id, \"job_parameters\": $JOB_PARAMS}" | jq -r ".run_id")
+  result="$?"
+  [ "$result" -ne "0" ] && err "[call_databricks_job|out]  couldn't find run id" && exit 1
+
+  cd "$_pwd"
+  echo "${run_id}"
+}
+
+check_job_completion(){
+  [ -z "$1" ] && err "[check_job_completion] missing argument run_id" && exit 1
+  local run_id=$1
+  local timeout=${2:-1800}  # default timeout of 30 minutes
+  local result=
+
+  wait_for_job_task "$run_id" "$timeout" 60
+
+  status=$(databricks jobs get-run "$run_id" | jq ".status.termination_details.type")
+  [ "$status" == "\"SUCCESS\"" ] && result=0 || result=1
+
+  [ "$result" -ne "0" ] && err "[check_job_completion|out] => ${result}" && exit 1
+  info "[check_job_completion|out] => ${result}"
+}

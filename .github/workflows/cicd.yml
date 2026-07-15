@@ -13,53 +13,35 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "deployed !!!"
+      - run: echo "deployed!"
 
-  describe_approval_a:
+  peer_approval_brief:
     needs: [deploy]
     runs-on: ubuntu-latest
     steps:
-      - name: Publish approval brief
+      - name: Peer approval brief
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          ## 🚦 Deployment awaiting approval A
+          ## 🚦 Peer approval
 
-          **What you are approving:**
-          - **Service:** lib-qsd-jobs
-          - **Version/Tag:** ${{ github.ref_name }}
-          - **Commit:** ${{ github.sha }}
-          - **Triggered by:** ${{ github.actor }}
-          - **Environment:** production
-
-          **Changes in this release:**
-          - <summary of changes / link to changelog / PR>
-
-          Please review the details above before approving.
+          I (System Owner / Delegate / Data Product Owner) 
+          approve that the validation report lives up to the requirements.
           EOF
-  # describe_approval_b:
+  # validation_lead_approval_brief:
   #   needs: [deploy]
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - name: Publish approval brief
+  #     - name: Validation Lead approval brief
   #       run: |
   #         cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-  #         ## 🚦 Deployment awaiting approval B
+  #         ## 🚦 Validation Lead approval
 
-  #         **What you are approving:**
-  #         - **Service:** lib-qsd-jobs
-  #         - **Version/Tag:** ${{ github.ref_name }}
-  #         - **Commit:** ${{ github.sha }}
-  #         - **Triggered by:** ${{ github.actor }}
-  #         - **Environment:** production
-
-  #         **Changes in this release:**
-  #         - <summary of changes / link to changelog / PR>
-
-  #         Please review the details above before approving.
+  #         I (Validation Lead / Delegate) 
+  #         approve that the validation report lives up to the requirements and that the report is transferred to QualityDocs and approved to a major version.
   #         EOF
 
-  approval_a:
-    needs: [describe_approval_a]
+  peer_approval:
+    needs: [peer_approval_brief]
     environment: prd
     runs-on: ubuntu-latest
     permissions:
@@ -67,10 +49,10 @@ jobs:
       pull-requests: read  # Required to read PR data for approvals report
       id-token: write
     steps:
-      - run: echo "thank you"
+      - run: echo "approved"
   
-  approval_a_check:
-    needs: [approval_a]
+  peer_approval_check:
+    needs: [peer_approval]
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required to create releases
@@ -80,23 +62,27 @@ jobs:
       - name: Fetch and record approval details
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          # Get the latest deployment for this ref+environment
-          deployment_id=$(gh api \
-            "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.ref_name }}&per_page=1" \
-            --jq '.[0].id')
-          echo "deployment id: $deployment_id"
+          ./helper.sh check_approval "${{ github.repository }}" "prd" "${{ github.sha }}"
+        
+        # run: |
+        #   # Get the latest deployment for this ref+environment
+        #   deployment_id=$(gh api \
+        #     "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.ref_name }}&per_page=1" \
+        #     --jq '.[0].id')
+        #   echo "deployment id: $deployment_id"
 
-          if [ -z "$deployment_id" ] || [ "$deployment_id" = "null" ]; then
-            echo "::error::No deployment found for environment 'prd' and ref '${{ github.ref_name }}'"
-            exit 1
-          fi
+        #   if [ -z "$deployment_id" ] || [ "$deployment_id" = "null" ]; then
+        #     echo "::error::No deployment found for environment 'prd' and ref '${{ github.ref_name }}'"
+        #     exit 1
+        #   fi
 
-          approvals=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
-            --jq '.[] | select(.state=="approved")')
-          echo "approvals: $approvals"
-          echo "...${{ github.repository }}"
-          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses"
+        #   approvals=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+        #     --jq '.[] | select(.state=="approved")')
+        #   echo "approvals: $approvals"
+        #   echo "...${{ github.repository }}"
+        #   gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses"
 
   # approval_b:
   #   needs: [describe_approval_b]
@@ -110,28 +96,28 @@ jobs:
   #     - run: echo "thank you"
 
   
-  record-approval:
-    needs: [approval_a_check]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fetch and record approval details
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Get the latest deployment for this ref+environment
-          deployment_id=$(gh api \
-            "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.sha }}&per_page=1" \
-            --jq '.[0].id')
-          # Approval reviews contain user, state, comment, and timestamps
-          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" > /dev/null 2>&1 || true
+  # record-approval:
+  #   needs: [peer_approval_check]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Fetch and record approval details
+  #       env:
+  #         GH_TOKEN: ${{ github.token }}
+  #       run: |
+  #         # Get the latest deployment for this ref+environment
+  #         deployment_id=$(gh api \
+  #           "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.sha }}&per_page=1" \
+  #           --jq '.[0].id')
+  #         # Approval reviews contain user, state, comment, and timestamps
+  #         gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" > /dev/null 2>&1 || true
 
-          gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
-            --jq '.[] | select(.state=="approved") |
-              "Approver: \(.user.login)\nDate: \(.updated_at)\nComment: \(.comment)"' \
-            | tee approval-record.txt >> "$GITHUB_STEP_SUMMARY"
+  #         gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+  #           --jq '.[] | select(.state=="approved") |
+  #             "Approver: \(.user.login)\nDate: \(.updated_at)\nComment: \(.comment)"' \
+  #           | tee approval-record.txt >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload approval record
-        uses: actions/upload-artifact@v4
-        with:
-          name: approval-record
-          path: approval-record.txt
+  #     - name: Upload approval record
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: approval-record
+  #         path: approval-record.txt
