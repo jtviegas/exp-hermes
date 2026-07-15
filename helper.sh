@@ -232,6 +232,8 @@ check_approval(){
   local GH_ENV="$2"
   [ -z "$3" ] && err "[check_approval] missing argument: COMMIT_SHA" && exit 1
   local COMMIT_SHA="$3"
+  [ -z "$4" ] && err "[check_approval] missing argument: GITHUB_RUN_ID" && exit 1
+  local GITHUB_RUN_ID="$4"
 
         #   {
         #     "role": "${{ needs.resolve-config.outputs.approval-role-validation-lead }}",
@@ -256,6 +258,8 @@ check_approval(){
   local approval_ts=$(gh api "/repos/${REPO}/deployments/${deployment_id}/statuses" --jq '.[] | select(.state=="success") | .updated_at')
   [ -z "$approval_ts" ] && err "[check_approval] no successful deployment status found for deployment id '${deployment_id}'" && exit 1
   info "[check_approval] approval timestamp: $approval_ts"
+
+  gh api "/repos/${REPO}/actions/runs/${GITHUB_RUN_ID}/approvals"
   
   info "[check_approval|out]"
 }
@@ -269,8 +273,8 @@ usage() {
     options:
 
       - reqs                    installs development requirements
-      - check_approval <REPO> <GH_ENV> <COMMIT_SHA>    
-                                checks if the deployment has been approved for a given repo, environment, and commit sha
+      - check_approval <REPO> <GH_ENV> <COMMIT_SHA> <GITHUB_RUN_ID>
+                                checks if the deployment has been approved for a given repo, environment, commit sha, and GitHub run ID
 
 EOM
   exit 1
@@ -282,7 +286,7 @@ case "$1" in
     dev_reqs
     ;;
   check_approval)
-    check_approval "$2" "$3" "$4"
+    check_approval "$2" "$3" "$4" "$5"
     ;;
   *)
     usage
