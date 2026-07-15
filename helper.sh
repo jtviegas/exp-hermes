@@ -224,7 +224,7 @@ dev_reqs(){
 }
 
 check_approval(){
-  info "[check_approval|in] ($1)"
+  info "[check_approval|in] ($1, $2, $3, $4)"
   
   [ -z "$1" ] && err "[check_approval] missing argument: REPO" && exit 1
   local REPO="$1"
