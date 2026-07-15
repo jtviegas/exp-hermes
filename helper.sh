@@ -295,7 +295,7 @@ usage() {
     options:
 
       - reqs                    installs development requirements
-      - check_approval <REPO> <GH_ENV> <COMMIT_SHA> <GITHUB_RUN_ID>
+      - check_approval <REPO> <GH_ENV> <COMMIT_SHA> <GITHUB_RUN_ID> <APPROVAL_DOC> <APPROVAL_HEADER>
                                 checks if the deployment has been approved for a given repo, environment, commit sha, and GitHub run ID
 
 EOM
@@ -308,7 +308,7 @@ case "$1" in
     dev_reqs
     ;;
   check_approval)
-    check_approval "$2" "$3" "$4" "$5"
+    check_approval "$2" "$3" "$4" "$5" "$6" "$7"
     ;;
   *)
     usage
