@@ -10,13 +10,19 @@ on:
   workflow_dispatch:  # Allows manual triggering from the Actions tab, useful for testing and re-runs.
 
 jobs:
-  describe:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "deployed !!!"
+
+  describe_approval_a:
+    needs: [deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Publish approval brief
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          ## 🚦 Deployment awaiting approval
+          ## 🚦 Deployment awaiting approval A
 
           **What you are approving:**
           - **Service:** lib-qsd-jobs
@@ -30,9 +36,56 @@ jobs:
 
           Please review the details above before approving.
           EOF
+  describe_approval_b:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish approval brief
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## 🚦 Deployment awaiting approval B
+
+          **What you are approving:**
+          - **Service:** lib-qsd-jobs
+          - **Version/Tag:** ${{ github.ref_name }}
+          - **Commit:** ${{ github.sha }}
+          - **Triggered by:** ${{ github.actor }}
+          - **Environment:** production
+
+          **Changes in this release:**
+          - <summary of changes / link to changelog / PR>
+
+          Please review the details above before approving.
+          EOF
+
+  approval_a:
+    needs: [describe_approval_a]
+    environment: prd
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to create releases
+      pull-requests: read  # Required to read PR data for approvals report
+      id-token: write
+    steps:
+      - run: echo "thank you"
+      - name: Fetch and record approval details
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get the latest deployment for this ref+environment
+          deployment_id=$(gh api \
+            "/repos/${{ github.repository }}/deployments?environment=prd&ref=${{ github.sha }}&per_page=1" \
+            --jq '.[0].id')
+
+          # Approval reviews contain user, state, comment, and timestamps
+          gh api "/repos/${{ github.repository }}/deployments/${deployment_id}/statuses" > /dev/null 2>&1 || true
+
+          gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+            --jq '.[] | select(.state=="approved")'
+
   
-  approval:
-    needs: describe
+  approval_b:
+    needs: [describe_approval_b]
     environment: prd
     runs-on: ubuntu-latest
     permissions:
@@ -44,7 +97,7 @@ jobs:
 
   
   record-approval:
-    needs: approval
+    needs: [approval_a, approval_b]
     runs-on: ubuntu-latest
     steps:
       - name: Fetch and record approval details
